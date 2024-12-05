@@ -470,6 +470,7 @@ if __name__ == "__main__":
         medicion.mutar(velocidad.retardado(PROPAGACION_TACOMETRO))
 
     # CONTROLADOR
+    # Oportunidad de mejora: si quisiéramos que el control funcionase mejor cuando hay varias ruedas con pérdida de tracción, podríamos, antes de tomar la velocidad promedio de las otras ruedas, filtrar los 'outliers', es decir, las ruedas que tengan velocidades muy distintas al resto, que necesariamente están en situaciones de pérdida de tracción.
     def control_traccion(medicion_velocidad_rueda, interruptor_control_traccion, mediciones_velocidades_ruedas):
         return lambda: interruptor_control_traccion.activado and medicion_velocidad_rueda.mayor(Constante(velocidad_promedio_otras_ruedas(medicion_velocidad_rueda, mediciones_velocidades_ruedas)* 1.5)) # Frena la rueda si su velocidad supera en más de 50 por ciento el promedio de las velocidades medidas para las otras ruedas
 
@@ -479,12 +480,12 @@ if __name__ == "__main__":
         accionador_freno_rueda.mutar(VariableIf(control_traccion(medicion_velocidad_rueda, interruptor_control_traccion, mediciones_velocidades_ruedas), Constante(1), Constante(0)))
 
     gráficos = [
-        [(f"Velocidad Rueda {i+1} (Salida)", [("Real", velocidad_ruedas[i]), ("Medición", mediciones_velocidades_ruedas[i])]) for i in range(4)], # Fila 1
+        [(f"Velocidad Rueda {i+1}", [("Real (θo)", velocidad_ruedas[i]), ("Medición (f, realimentacion)", mediciones_velocidades_ruedas[i])]) for i in range(4)], # Fila 1
         [(f"Aceleración Rueda {i+1}", [aceleracion_ruedas[i]]) for i in range(4)], # Fila 2
         [(f"Agarre Rueda {i+1} (Perturbación)", [agarre_asfalto[i]]) for i in range(4)], # Fila 3
         [(f"Actuador Frenos {i+1} (Actuador)", [actuador_frenos[i]]) for i in range(4)], # Fila 4
-        [(f"Velocidad otras ruedas (Val. Nom. rueda {i+1})", [velocidades_promedio_otras_ruedas[i]]) for i in range(4)], # Fila 5
-        [("Acelerador (Entrada)", [acelerador])] # Fila 6
+        [(f"Velocidad otras ruedas (θi rueda {i+1})", [velocidades_promedio_otras_ruedas[i]]) for i in range(4)], # Fila 5
+        [("Acelerador (Entrada del usuario)", [acelerador])] # Fila 6
     ]
 
     graficos = Graficos(titulo="", ventana_temporal_en_segundos=10, graficos=gráficos)
