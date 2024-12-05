@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from collections import defaultdict
 from abc import ABC, abstractmethod
-from typing import Dict, Mapping
+from typing import Callable, Dict, Mapping, List, Tuple
 import random
 import tkinter as tk
 import time
@@ -18,7 +18,7 @@ class Variable(ABC):
 
     @abstractmethod
     def valor(self) -> float:
-        """
+        """/
         Debe devolver el valor actualizado de la variable que representa.
         """
         pass
@@ -37,6 +37,18 @@ class Variable(ABC):
     
     def acotado(self, cota_inferior: 'Variable', cota_superior: 'Variable') -> 'Variable':
         return VariableAcotada(self, cota_inferior, cota_superior)
+    
+    def transformada(self, funcion: Callable[[float], float], cota_inferior, cota_superior) -> 'Variable':
+        return VariableLambda(lambda: funcion(self.valor()), cota_inferior, cota_superior)
+    
+    def mayor(self, otra: 'Variable') -> bool:
+        return self.valor() > otra.valor()
+    
+    def menor(self, otra: 'Variable') -> bool:
+        return self.valor() < otra.valor()
+    
+    def igual(self, otra: 'Variable') -> bool:
+        return self.valor() == otra.valor()
 
 class Timer(ABC):
     TICK = 0.01 # segundos
@@ -67,78 +79,86 @@ class Timer(ABC):
 def tiempo_transcurrido_desde(t):
     return time.time() - t
 
+# Type aliases for better readability
+VariableGraficada = Tuple[str, Variable] # Una variable con su nombre
+Grafico = Tuple[str, List[VariableGraficada]] # Una lista de variables a graficar en un mismo eje cartesiano, y el nombre del gráfico
+Renglon = List
+GrillaGraficos = List[Renglon[Grafico]]
+
 class Graficos:
     """
     Grafica la evolución temporal de una cantidad arbitraria de variables.
     """
-    def __init__(self, titulo: str = "Evolución Temporal de Variables", 
+    def __init__(self, titulo: str = "", 
                  x_label: str = "Tiempo", y_label: str = "Valor", 
-                 x_lim: int = 100, ventana_temporal: int = 10, 
-                 graficos: Dict[str, Variable] = {}):
+                 x_lim: int = 100, ventana_temporal_en_segundos: int = 10, 
+                 graficos: GrillaGraficos = []):
         """
         Inicializa el gráfico con múltiples subplots y configura las fuentes de datos directamente.
-        """
-        etiquetas = list(graficos.keys())
-        if len(etiquetas) != len(set(etiquetas)):
-            raise ValueError("No puede haber dos gráficos con la misma etiqueta.")
 
-        self.fuentes = graficos
-        self.variables = list(self.fuentes.keys())
-        self.x_data = []
-        self.y_data = defaultdict(list)
+        :param titulo: Título del gráfico principal.
+        :param xLabel: Etiqueta del eje X.
+        :param yLabel: Etiqueta del eje Y.
+        :param xLim: Límite del eje X.
+        :param ventanaTemporalEnSegundos: Duración de la ventana temporal en segundos.
+        :param graficos: Lista de listas, de gráficos. Cada lista de segundo nivel (lista adentro de la lista que contiene todo) define un nuevo renglón en la grilla donde se mostrarán gráficos. Cada gráfico es una tupla (descripción, [(etiqueta, variable)]). Agregar varios (etiqueta, variable) en un mismo gráfico permite graficar varias variables en un mismo eje cartesiano.
+        """
+        self.titulo = titulo
+        self.x_label = x_label
+        self.y_label = y_label
         self.x_lim = x_lim
-        self.ventana_temporal = ventana_temporal
+        self.ventana_temporal = ventana_temporal_en_segundos
+        self.layout = graficos or [[]]
+        self.filas = len(self.layout)
+        self.columnas = max(len(row) for row in self.layout)
+        self.fuentes: Dict[str, Variable] = {}
+        self.variables: List[str] = []
+        self.x_data: List[int] = []
+        self.y_data: Dict[str, List[float]] = defaultdict(list)
         self.frame = 0
 
-        total_graficos = len(self.variables)
-        filas = columnas = int(total_graficos**0.5) + 1
-
-        self.fig, self.axes = plt.subplots(filas, columnas, figsize=(12, 12))
+        self.fig, self.axes = plt.subplots(self.filas, self.columnas, figsize=(12, 12))
         self.axes = self.axes.flatten()
 
-        for i in range(total_graficos, len(self.axes)):
+        for i in range(self.filas * self.columnas):
             self.axes[i].axis('off')
 
-        self.lines = {}
-        for i, (ax, variable) in enumerate(zip(self.axes[:total_graficos], self.variables)):
-            ax.set_xlim(0, self.x_lim)
-            superior_y_lim = self.fuentes[variable].cota_superior
-            inferior_y_lim = self.fuentes[variable].cota_inferior
-            ax.set_ylim(inferior_y_lim, superior_y_lim)
-            ax.set_title(variable)
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(y_label)
-            ax.set_xticklabels([])  # Remove numerical indicators from X-axis
-            line, = ax.plot([], [], lw=2)
-            self.lines[variable] = line
-            ax.legend().remove()
-
-        self.fig.suptitle(f"{titulo} (últimos {ventana_temporal} segundos)")
+        self.lines: Dict = {}
+        self.fig.suptitle(f"{titulo} (últimos {ventana_temporal_en_segundos} segundos)")
         plt.subplots_adjust(hspace=0.5, wspace=0.5)
 
-    def agregar_graficos_multiples(self, grupos_de_variables):
-        """
-        Agrupa en los mismos ejes cartesianos las variables pasadas por parámetro.
-        :param grupos_de_variables: Lista de tuplas (tituloGrafico, [(etiqueta, variable)]).
-        """
+        self._configurar_graficos()
+
+    def _configurar_graficos(self):
         colores = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'cyan', 'magenta']
-        for ax, (titulo, grupo) in zip(self.axes, grupos_de_variables):
-            if not grupo:
-                continue
-            ax.set_xlim(0, self.x_lim)
-            ax.set_ylim(min(var.cota_inferior for _, var in grupo), 
-                        max(var.cota_superior for _, var in grupo))
-            for i, (etiqueta, variable) in enumerate(grupo):
-                nombre_variable = f"{titulo} - {etiqueta}"
-                self.fuentes[nombre_variable] = variable
-                line, = ax.plot([], [], lw=2, label=etiqueta, color=colores[i % len(colores)])
-                self.lines[nombre_variable] = line
-            ax.legend()
-            ax.set_title(titulo)
-            ax.set_xlabel("Tiempo")
-            ax.set_ylabel("Valor")
-            ax.set_xticklabels([])  # Remove numerical indicators from X-axis
-        plt.subplots_adjust(hspace=0.5, wspace=0.5)
+        for i, fila in enumerate(self.layout):
+            for j, (titulo, variables) in enumerate(fila):
+                ax = self.axes[i * self.columnas + j]
+                ax.set_xlim(0, self.x_lim)
+                if all(isinstance(var, Variable) for var in variables):
+                    ax.set_ylim(min(var.cota_inferior for var in variables),  # type: ignore porque ya chequeé los tipos en el if de arriba
+                                max(var.cota_superior for var in variables))  # type: ignore porque ya chequeé los tipos en el if de arriba
+                else:
+                    ax.set_ylim(min(var.cota_inferior for _, var in variables), 
+                                max(var.cota_superior for _, var in variables))
+                for k, variable in enumerate(variables):
+                    if isinstance(variable, tuple):
+                        etiqueta, variable = variable
+                    else:
+                        etiqueta = None
+                    nombre_variable = f"{titulo} - {etiqueta}" if etiqueta else titulo
+                    self.fuentes[nombre_variable] = variable
+                    line, = ax.plot([], [], lw=2, label=etiqueta if etiqueta else "", color=colores[k % len(colores)])
+                    self.lines[nombre_variable] = line
+                if any(isinstance(variable, tuple) for variable in variables):
+                    ax.legend()
+                ax.set_title(titulo)
+                ax.set_xlabel(self.x_label)
+                ax.set_ylabel(self.y_label)
+                ax.set_xticklabels([])  # Remove numerical indicators from X-axis
+                ax.axis('on')
+                self.variables.append(titulo)
+        plt.subplots_adjust(hspace=0.7, wspace=0.5)
 
     def actualizar_datos(self) -> None:
         """
@@ -163,7 +183,7 @@ class Graficos:
             line.set_data(self.x_data, self.y_data[variable])
             if self.frame > self.x_lim:
                 line.axes.set_xlim(self.frame - self.x_lim, self.frame)
-        return self.lines.values()
+        return list(self.lines.values())
 
     def iniciar(self, interval: int = 100) -> None:
         """
@@ -173,7 +193,6 @@ class Graficos:
         def actualizar_y_graficar(_):
             self.actualizar_datos()
             return self.actualizar(_)
-        # Si no me guardo ani en una variable, no funcionan los gráficos. Debe ser por algún tipo de recolección de basura.
         ani = animation.FuncAnimation(self.fig, actualizar_y_graficar, interval=interval, blit=True)
         plt.show()
 
@@ -296,7 +315,7 @@ class VariableAcotada(Variable):
 
 class VariableConTasaDeCambioConstante(Variable, Timer):
     def __init__(self, valor_inicial: float, cota_inferior: Variable, cota_superior: Variable, tasa_de_cambio_por_segundo: Variable):
-        self._valor = valor_inicial
+        self._valor: float = valor_inicial
         self.tasa_de_cambio = tasa_de_cambio_por_segundo
         self.var_cota_inferior = cota_inferior
         self.var_cota_superior = cota_superior
@@ -311,7 +330,7 @@ class VariableConTasaDeCambioConstante(Variable, Timer):
         return self._valor
 
 class VariableLambda(Variable):
-    def __init__(self, funcion, cota_inferior: float, cota_superior: float):
+    def __init__(self, funcion: Callable[[], float], cota_inferior: float, cota_superior: float):
         self.funcion = funcion
         super().__init__(cota_inferior, cota_superior)
 
@@ -332,95 +351,142 @@ class VariableMutable(Variable):
             raise ValueError(f"La variable nueva no tiene los límites definidos originalmente para esta Variable Mutable. Originales: {self.variable.cota_inferior} y {self.variable.cota_superior}. Nuevos: {nueva_variable.cota_inferior} y {nueva_variable.cota_superior}")
         self.variable = nueva_variable
 
-control_activado = False
+class VariableQueReaccionaAlCambio(Variable, Timer):
+    def __init__(self, variable_que_trackeo: Variable, cambio_al_que_reacciono: Callable[[float, float], bool], 
+                 valor_cuando_hubo_un_cambio: Variable, valor_normal: Variable):
+        self.variable_que_trackeo = variable_que_trackeo
+        self.cambio_al_que_reacciono = cambio_al_que_reacciono
+        self.valor_normal = valor_normal
+        self.valor_cuando_hubo_un_cambio = valor_cuando_hubo_un_cambio
+        self.valor_anterior = variable_que_trackeo.valor()
+        self.hubo_cambio = False
+        Variable.__init__(self, min(valor_normal.cota_inferior, valor_cuando_hubo_un_cambio.cota_inferior), max(valor_normal.cota_superior, valor_cuando_hubo_un_cambio.cota_superior))
+        Timer.__init__(self)
 
-def toggle_control():
-    global control_activado
-    control_activado = not control_activado
+    def valor(self) -> float:
+        if (self.hubo_cambio):
+            self.hubo_cambio = False # hubo_cambio solo se setea el False cuando se pide un valor a esta variable. Así, me aseguro de que todo cambio en la variable trackeada, tenga un impacto en esta.
+            return self.valor_cuando_hubo_un_cambio.valor()
+        else:
+            return self.valor_normal.valor()
+        
+    def tick(self):
+        self.hubo_cambio |= self.cambio_al_que_reacciono(self.valor_anterior, self.variable_que_trackeo.valor()) # Si hubo_cambio es True, sigue siendo True. Si es False, lo seteo en True si ocurrió el cambio al que reacciono en el último tick
+        self.valor_anterior = self.variable_que_trackeo.valor() # Actualizo el valor anterior
 
-def iniciar_interfaz_control():
-    root = tk.Tk()
-    root.title("Control de Sistema")
+class VariableIf(Variable):
+    def __init__(self, condicion: Callable[[], bool], valor_si_cierto: Variable, valor_si_falso: Variable):
+        self.condicion = condicion
+        self.valor_si_cierto = valor_si_cierto
+        self.valor_si_falso = valor_si_falso
+        super().__init__(min(valor_si_cierto.cota_inferior, valor_si_falso.cota_inferior), max(valor_si_cierto.cota_superior, valor_si_falso.cota_superior))
 
-    var_control = tk.BooleanVar(value=control_activado)
-    checkbutton_control = tk.Checkbutton(root, text="Sistema de control activado", variable=var_control, command=toggle_control)
-    checkbutton_control.pack(padx=20, pady=20)
+    def valor(self) -> float:
+        return self.valor_si_cierto.valor() if self.condicion() else self.valor_si_falso.valor()
 
-    root.mainloop()
+class InterruptorControlTraccion:
+    def __init__(self):
+        self.activado = False
+        self.iniciar_en_hilo_paralelo()
+
+    def iniciar_en_hilo_paralelo(self):
+        threading.Thread(target=self.abrir_interruptor, daemon=True).start()
+    
+    def toggle_control(self):
+        self.activado = not self.activado
+
+    def abrir_interruptor(self):
+        root = tk.Tk()
+        root.title("Control de Sistema")
+
+        var_control = tk.BooleanVar(value=self.activado)
+        checkbutton_control = tk.Checkbutton(root, text="Sistema de control activado", variable=var_control, command=self.toggle_control)
+        checkbutton_control.pack(padx=20, pady=20)
+
+        root.mainloop()
 
 if __name__ == "__main__":
-    # SISTEMA A CONTROLAR
+    # CONSTANTES FÍSICAS QUE DEPENDEN DE LAS CARATERÍSTICAS TÉCNICAS DEL AUTOMÓVIL
     VELOCIDAD_MAXIMA_RUEDAS_CON_TRACCION = 180 # En radianes/segundo. Para neumáticos de diámetro 17 pulgadas, para ir a una velocidad máxima de 140hm/h: (38.8888 m/s) / ((17 / 39.37 / 2) m) = 180 rad/s
     CAPACIDAD_ACELERACION_LINEAL = 1.944444 # En m/s2. Nuestro auto iría de 0 a 140km/h, que es su velocidad máxima, en 20 segundos.
     CAPACIDAD_ACELERACION_DE_RUEDAS = 9 # Aceleración en giros por segundo que el auto le aplica a las ruedas, cuando el agarre es máximo. Es la CAPACIDAD_ACELERACION_LINEAL dividido por el radio de las ruedas, que es 17 / 39.37 / 2 = 0.216
-    acelerador = VariableDeslizadorEnPantalla(Deslizador("Acelerador", minimo=0, maximo=1, inicial=0))
-    agarreAsfalto = [VariableDeslizadorEnPantalla(Deslizador(f"Agarre Rueda {numero_de_rueda}", minimo=0, maximo=1, inicial=1)) for numero_de_rueda in [1,2,3,4] ]
-
-    accionadorFrenos = [VariableMutable(Constante(0), 0, 1), VariableMutable(Constante(0), 0, 1), 
-                        VariableMutable(Constante(0), 0, 1), VariableMutable(Constante(0), 0, 1)] # Al principio, seteamos la salida del sistema de control en 0, porque no tenemos todavía la primera medición
-
-    # La velocidad de las ruedas se reduce por el agarre que tiene el asfalto. Cuanto más agarre tenga, más resistencia a la rotación
-    # van a tener las ruedas, porque estas van a estar haciendo fuerza para cambiar la velocidad del auto.
-    resistenciaAlAvance = Constante(1)
-    aceleraciónRuedas = [VariableLambda(lambda agarre=agarre, freno=freno: 
-                                        -100 if freno.valor() == 1 else 
-                                        100 if agarre.valor() != 1 and acelerador.valor() > 0 
-                                        else acelerador.valor() * CAPACIDAD_ACELERACION_DE_RUEDAS, 
-                                    -100, 100) # La aceleración de las ruedas es proporcional a la posición del acelerador, pero si la rueda no tiene agarre, acelera un montón porque patina, y si está siendo frenada y tenemos pérdida de tracción, frena súper rápido
-                        .menos(resistenciaAlAvance) 
-        for agarre, freno in zip(agarreAsfalto, accionadorFrenos)] # Lo defino como aceleración - 1, para representar la resistencia al avance del auto, que se opone a la aceleración. Así, si dejamos el acelerador en un nivel inferior al 10%, la velocidad irá bajando
-
-    VELOCIDAD_MINIMA_RUEDAS = 0  # La velocidad de las ruedas tiene como cota inferior 0 porque no contemplamos la posibilidad de que el auto pueda ir para atrás
-    VELOCIDAD_MAXIMA_RUEDAS = VELOCIDAD_MAXIMA_RUEDAS_CON_TRACCION
-
-    velocidadPromedioRuedas = VariableMutable(Constante(0), VELOCIDAD_MINIMA_RUEDAS, VELOCIDAD_MAXIMA_RUEDAS) # Al principio, seteamos la velocidad inicial 
-
-    velocidadRuedas = [VariableConTasaDeCambioConstante(40,
-                Constante(VELOCIDAD_MINIMA_RUEDAS), 
-                VariableLambda(lambda agarre=agarre: velocidadPromedioRuedas.valor() if agarre.valor() == 1 else VELOCIDAD_MAXIMA_RUEDAS, VELOCIDAD_MINIMA_RUEDAS, VELOCIDAD_MAXIMA_RUEDAS), 
-                aceleracion)
-        for aceleracion, agarre in zip(aceleraciónRuedas, agarreAsfalto)]
-
-    # SISTEMA DE CONTROL
+    RESISTENCIA_AL_AVANCE = 1 # En m/s2. La resistencia al avance que cada rueda experimenta. Es un frenado constante que se opone al avance del auto, por sus características aerodinámicas y resistencias de los componentes mecánicos.
+    VELOCIDAD_MAXIMA_RUEDAS = VELOCIDAD_MAXIMA_RUEDAS_CON_TRACCION * 5 # Cuando pierden tracción, las ruedas giran libres, alcanzando velocidades mucho más altas, porque ya no tienen la resistencia del auto.
     PROPAGACION_TACOMETRO = 0.5 # tiempo que se tarda en medir la velodicad de las ruedas
-    medicionesVelocidadesRuedas = [velocidad.retardado(PROPAGACION_TACOMETRO) for velocidad in velocidadRuedas]
-    velocidadPromedioRuedas.mutar(VariableLambda(lambda: sum([medicion.valor() for medicion in medicionesVelocidadesRuedas]) / len(medicionesVelocidadesRuedas), VELOCIDAD_MINIMA_RUEDAS, VELOCIDAD_MAXIMA_RUEDAS))
-
-    for accionadorFrenoRueda, medicionVelocidadRueda in zip(accionadorFrenos, medicionesVelocidadesRuedas): # Ahora que ya tenemos la primer medición, creamos el ciclo de realimentación
-        def crear_lambda(medicion):
-            return lambda medicion=medicion: 1 if control_activado and medicion.valor() > velocidadPromedioRuedas.valor() * 2 else 0
-        accionadorFrenoRueda.mutar(VariableLambda(crear_lambda(medicionVelocidadRueda), 0, 1))
-
-    graficos = {
-        "a": Constante(0), #Después se van a pisar cuando haga el agregar_gráficos_múltiples. Sí, es feo.
-        "b": Constante(0),
-        "c": Constante(0),
-        "d": Constante(0),
-        "Acelerador": acelerador,
-        "Agarre Rueda 1": agarreAsfalto[0],
-        "Agarre Rueda 2": agarreAsfalto[1],
-        "Agarre Rueda 3": agarreAsfalto[2],
-        "Agarre Rueda 4": agarreAsfalto[3],
-        "Velocidad Promedio Ruedas": velocidadPromedioRuedas,
-        "Accionador Frenos 1": accionadorFrenos[0],
-        "Accionador Frenos 2": accionadorFrenos[1],
-        "Accionador Frenos 3": accionadorFrenos[2],
-        "Accionador Frenos 4": accionadorFrenos[3],
-        "Aceleración Rueda 1": aceleraciónRuedas[0],
-        "Aceleración Rueda 2": aceleraciónRuedas[1],
-        "Aceleración Rueda 3": aceleraciónRuedas[2],
-        "Aceleración Rueda 4": aceleraciónRuedas[3],
-    }
-
-    graficos = Graficos(titulo="Señales en tiempo real", graficos=graficos, ventana_temporal=10)
-    graficos.agregar_graficos_multiples([
-        ("Velocidad Rueda 1", [("Real", velocidadRuedas[0]), ("Medición", medicionesVelocidadesRuedas[0])]),
-        ("Velocidad Rueda 2", [("Real", velocidadRuedas[1]), ("Medición", medicionesVelocidadesRuedas[1])]),
-        ("Velocidad Rueda 3", [("Real", velocidadRuedas[2]), ("Medición", medicionesVelocidadesRuedas[2])]),
-        ("Velocidad Rueda 4", [("Real", velocidadRuedas[3]), ("Medición", medicionesVelocidadesRuedas[3])])
-    ])
     
-    # Iniciar la interfaz de control en otro hilo
-    threading.Thread(target=iniciar_interfaz_control, daemon=True).start()
+    # CONTROLES DEL AUTOMÓVIL (ENTRADAS)
+    # ACELERADOR
+    acelerador = VariableDeslizadorEnPantalla(Deslizador("Acelerador", minimo=0, maximo=1, inicial=0))
+    # ACTIVA O DESACTIVA EL CONTROL DE TRACCIÓN EN EL CONTROLADOR
+    interruptor_control_traccion = InterruptorControlTraccion() 
     
+    # PÉRDIDAS DE TRACCIÓN / RUIDO. 1 es agarre perfecto, 0 es pérdida total de tracción. Por defecto es 1, y se puede reducir manualmente para ver la respuesta del sistema.
+    agarre_asfalto = [VariableDeslizadorEnPantalla(Deslizador(f"Agarre Rueda {numero_de_rueda}", minimo=0, maximo=1, inicial=1)) for numero_de_rueda in [1,2,3,4] ]
+ 
+    # ACTUADOR DEL FRENO, Y FRENO
+    # Seteamos inicialmente en 0, porque no tenemos ninguna medición. # TODO: CAMBIANDO EL ORDEN NO SE PUEDE HACER QUE ESTO DEJE DE SER NECESARIO?
+    actuador_frenos = [VariableMutable(Constante(0), 0, 1) for _ in range(4)]
+
+    # TORQUE APLICADO SOBRE LAS RUEDAS
+    # La velocidad de las ruedas se reduce por el agarre que tiene el asfalto. Cuanto más agarre tenga, más resistencia a la rotación van a tener las ruedas, porque estas van a estar haciendo fuerza para cambiar la velocidad del auto.
+    aceleracion_ruedas = [VariableLambda(lambda agarre=agarre, freno=freno: 
+                                        -100 if freno.valor() == 1 else # Si estoy frenando
+                                        50 if agarre.valor() != 1 and acelerador.valor() > 0 # Si estoy acelerando y no tengo agarre
+                                        else acelerador.valor() * CAPACIDAD_ACELERACION_DE_RUEDAS, # Situación de agarre normal
+                                    -100, 100) # La aceleración de las ruedas es proporcional a la posición del acelerador, pero si la rueda no tiene agarre, acelera un montón porque patina, y si está siendo frenada y tenemos pérdida de tracción, frena súper rápido
+                        .menos(Constante(RESISTENCIA_AL_AVANCE)) 
+        for agarre, freno in zip(agarre_asfalto, actuador_frenos)] # Lo defino como aceleración - 1, para representar la resistencia al avance del auto, que se opone a la aceleración. Así, si dejamos el acelerador en un nivel inferior al 10%, la velocidad irá bajando
+
+    def velocidad_promedio_otras_ruedas(medicion, velocidades):
+        return (sum([medicion.valor() for medicion in velocidades]) - medicion.valor()) / (len(velocidades) - 1)
+
+    # TACÓMETRO
+    # Inicializada en 0 porque en el primer ciclo no contamos con la medición
+    mediciones_velocidades_ruedas = [VariableMutable(Constante(0), 0, VELOCIDAD_MAXIMA_RUEDAS) for _ in range(4)]
+
+    # VELOCIDAD DE LAS RUEDAS (SALIDA DEL SISTEMA)
+    # Comienza siendo 0
+    velocidad_ruedas = [VariableMutable(Constante(0), 0, VELOCIDAD_MAXIMA_RUEDAS) for _ in range(4)]
+
+    # CÁLCULO REALIZADO POR EL ECU
+    velocidades_promedio_otras_ruedas = [
+        VariableLambda(lambda medicion=medicion: velocidad_promedio_otras_ruedas(medicion, mediciones_velocidades_ruedas), 0, VELOCIDAD_MAXIMA_RUEDAS) 
+        for medicion in mediciones_velocidades_ruedas]
+
+    # COMPORTAMIENTO FÍSICO RUEDAS Y COCHE
+    # Normalmente, las ruedas tienen un límite de velocidad igual a VELOCIDAD_MAXIMA_RUEDAS
+    # Pero cuando una rueda que estaba girando libre retoma la tracción, esta vuelve a girar a la velocidad de las otras ruedas
+    velocidades_limite_ruedas: List[Variable] = [
+        VariableQueReaccionaAlCambio(variable_que_trackeo = traccion, 
+                                     cambio_al_que_reacciono = lambda traccion_anterior, traccion_actual: traccion_anterior < 1 and traccion_actual == 1, # Cuando se recupera la tracción
+                                     valor_cuando_hubo_un_cambio = VariableLambda(lambda velocidad=velocidad, velocidad_ruedas=velocidad_ruedas: velocidad_promedio_otras_ruedas(velocidad, velocidad_ruedas), 0, VELOCIDAD_MAXIMA_RUEDAS_CON_TRACCION), # Limito la velocidad de cada rueda a la velocidad promedio de las otras ruedas. Esto hace que cuando una rueda está sin agarre, si luego vuelve a estar tener tracción, retome inmediatamente la velocidad del resto. Así es como ocurre en la realidad.
+                                     valor_normal = VariableLambda(lambda traccion=traccion: VELOCIDAD_MAXIMA_RUEDAS_CON_TRACCION if traccion.valor() == 1 else VELOCIDAD_MAXIMA_RUEDAS, VELOCIDAD_MAXIMA_RUEDAS_CON_TRACCION, VELOCIDAD_MAXIMA_RUEDAS)) # Si no, la limito solamente con la velocidad máxima 'normal'
+        for velocidad, traccion in zip(velocidad_ruedas, agarre_asfalto)]
+
+    # Defino estas variables, que antes había inicializado en 0
+    for velocidad, velocidad_limite, aceleracion in zip(velocidad_ruedas, velocidades_limite_ruedas, aceleracion_ruedas):
+        velocidad.mutar(VariableConTasaDeCambioConstante(0, Constante(0), velocidad_limite, aceleracion))
+    for medicion, velocidad in zip(mediciones_velocidades_ruedas, velocidad_ruedas):
+        medicion.mutar(velocidad.retardado(PROPAGACION_TACOMETRO))
+
+    # CONTROLADOR
+    def control_traccion(medicion_velocidad_rueda, interruptor_control_traccion, mediciones_velocidades_ruedas):
+        return lambda: interruptor_control_traccion.activado and medicion_velocidad_rueda.mayor(Constante(velocidad_promedio_otras_ruedas(medicion_velocidad_rueda, mediciones_velocidades_ruedas)* 1.5)) # Frena la rueda si su velocidad supera en más de 50 por ciento el promedio de las velocidades medidas para las otras ruedas
+
+    # ACTUADOR DEL FRENO, Y FRENO
+    # Defino esta variables, que antes había inicializado en 0
+    for accionador_freno_rueda, medicion_velocidad_rueda in zip(actuador_frenos, mediciones_velocidades_ruedas): # Ahora que ya tenemos la primer medición, creamos el ciclo de realimentación
+        accionador_freno_rueda.mutar(VariableIf(control_traccion(medicion_velocidad_rueda, interruptor_control_traccion, mediciones_velocidades_ruedas), Constante(1), Constante(0)))
+
+    gráficos = [
+        [(f"Velocidad Rueda {i+1} (Salida)", [("Real", velocidad_ruedas[i]), ("Medición", mediciones_velocidades_ruedas[i])]) for i in range(4)], # Fila 1
+        [(f"Aceleración Rueda {i+1}", [aceleracion_ruedas[i]]) for i in range(4)], # Fila 2
+        [(f"Agarre Rueda {i+1} (Perturbación)", [agarre_asfalto[i]]) for i in range(4)], # Fila 3
+        [(f"Actuador Frenos {i+1} (Actuador)", [actuador_frenos[i]]) for i in range(4)], # Fila 4
+        [(f"Velocidad otras ruedas (Val. Nom. rueda {i+1})", [velocidades_promedio_otras_ruedas[i]]) for i in range(4)], # Fila 5
+        [("Acelerador (Entrada)", [acelerador])] # Fila 6
+    ]
+
+    graficos = Graficos(titulo="", ventana_temporal_en_segundos=10, graficos=gráficos)
+
     graficos.iniciar(int(Timer.TICK * 1000))
