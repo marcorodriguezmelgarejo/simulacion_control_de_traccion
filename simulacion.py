@@ -79,7 +79,7 @@ class Timer(ABC):
 def tiempo_transcurrido_desde(t):
     return time.time() - t
 
-# Type aliases for better readability
+# Alias de tipos
 VariableGraficada = Tuple[str, Variable] # Una variable con su nombre
 Grafico = Tuple[str, List[VariableGraficada]] # Una lista de variables a graficar en un mismo eje cartesiano, y el nombre del gráfico
 Renglon = List
